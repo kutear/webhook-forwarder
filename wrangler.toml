@@ -1,0 +1,15 @@
+name = "webhook-forwarder"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# 后端目标地址配置
+# 在 Cloudflare Dashboard 中配置环境变量 WEBHOOK_TARGETS
+# 格式: JSON 数组，例如: ["https://example1.com/webhook", "https://example2.com/webhook"]
+
+[vars]
+# 默认配置（可在 Dashboard 中覆盖）
+# WEBHOOK_TARGETS = '["https://target1.example.com/webhook", "https://target2.example.com/webhook"]'
+
+# 开发环境配置
+[env.dev.vars]
+WEBHOOK_TARGETS = '["http://localhost:3001/webhook", "http://localhost:3002/webhook"]'
