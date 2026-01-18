@@ -8,6 +8,8 @@ export interface Env {
   // 目标 webhook 地址配置，JSON 对象格式
   // 格式: { "uuid1": ["url1", "url2"], "uuid2": ["url3"] }
   WEBHOOK_TARGETS: string;
+  // 调试模式，设置为 "true" 时允许访问 /config 端点
+  DEBUG?: string;
 }
 
 interface WebhookConfig {
@@ -167,8 +169,17 @@ export default {
       return handleHealthCheck();
     }
 
-    // 配置查询端点
+    // 配置查询端点（仅在 DEBUG=true 时可用）
     if (url.pathname === '/config' && request.method === 'GET') {
+      if (env.DEBUG !== 'true') {
+        return new Response(
+          JSON.stringify({ error: 'Not Found' }),
+          {
+            status: 404,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+      }
       const config = parseConfig(env.WEBHOOK_TARGETS || '{}');
       return handleConfigQuery(config);
     }
