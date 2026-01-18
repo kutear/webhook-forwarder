@@ -1,12 +1,17 @@
 /**
  * Webhook Forwarder - Cloudflare Worker
  * 
- * 将收到的 webhook 请求转发到多个配置的后端地址
+ * 将收到的 webhook 请求根据 UUID 转发到对应配置的后端地址
  */
 
 export interface Env {
-  // 目标 webhook 地址列表，JSON 数组格式
+  // 目标 webhook 地址配置，JSON 对象格式
+  // 格式: { "uuid1": ["url1", "url2"], "uuid2": ["url3"] }
   WEBHOOK_TARGETS: string;
+}
+
+interface WebhookConfig {
+  [uuid: string]: string[];
 }
 
 interface ForwardResult {
@@ -19,6 +24,7 @@ interface ForwardResult {
 }
 
 interface ForwardResponse {
+  uuid: string;
   message: string;
   totalTargets: number;
   successful: number;
@@ -76,16 +82,24 @@ async function forwardToTarget(
 /**
  * 解析目标地址配置
  */
-function parseTargets(targetsConfig: string): string[] {
+function parseConfig(configStr: string): WebhookConfig {
   try {
-    const targets = JSON.parse(targetsConfig);
-    if (!Array.isArray(targets)) {
-      throw new Error('WEBHOOK_TARGETS must be a JSON array');
+    const config = JSON.parse(configStr);
+    if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+      throw new Error('WEBHOOK_TARGETS must be a JSON object');
     }
-    return targets.filter((t): t is string => typeof t === 'string' && t.length > 0);
+    
+    // 验证并清理配置
+    const result: WebhookConfig = {};
+    for (const [uuid, targets] of Object.entries(config)) {
+      if (Array.isArray(targets)) {
+        result[uuid] = targets.filter((t): t is string => typeof t === 'string' && t.length > 0);
+      }
+    }
+    return result;
   } catch (error) {
     console.error('Failed to parse WEBHOOK_TARGETS:', error);
-    return [];
+    return {};
   }
 }
 
@@ -101,24 +115,47 @@ function handleHealthCheck(): Response {
 /**
  * 处理配置查询
  */
-function handleConfigQuery(targets: string[]): Response {
+function handleConfigQuery(config: WebhookConfig): Response {
+  const safeConfig: { [uuid: string]: string[] } = {};
+  
+  for (const [uuid, targets] of Object.entries(config)) {
+    safeConfig[uuid] = targets.map((t) => {
+      // 隐藏敏感信息（如 query params）
+      try {
+        const url = new URL(t);
+        return `${url.protocol}//${url.host}${url.pathname}`;
+      } catch {
+        return '(invalid url)';
+      }
+    });
+  }
+
   return new Response(
     JSON.stringify({
-      targets: targets.map((t) => {
-        // 隐藏敏感信息
-        try {
-          const url = new URL(t);
-          return `${url.protocol}//${url.host}${url.pathname}`;
-        } catch {
-          return '(invalid url)';
-        }
-      }),
-      count: targets.length,
-    }),
+      uuids: Object.keys(config),
+      count: Object.keys(config).length,
+      config: safeConfig,
+    }, null, 2),
     {
       headers: { 'Content-Type': 'application/json' },
     }
   );
+}
+
+/**
+ * 从路径中提取 UUID
+ * /webhook/abc-123 -> abc-123
+ * /webhook/abc-123/extra/path -> abc-123
+ */
+function extractUuidFromPath(pathname: string): { uuid: string; subPath: string } | null {
+  const match = pathname.match(/^\/webhook\/([^\/]+)(\/.*)?$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    uuid: match[1],
+    subPath: match[2] || '',
+  };
 }
 
 export default {
@@ -132,19 +169,37 @@ export default {
 
     // 配置查询端点
     if (url.pathname === '/config' && request.method === 'GET') {
-      const targets = parseTargets(env.WEBHOOK_TARGETS || '[]');
-      return handleConfigQuery(targets);
+      const config = parseConfig(env.WEBHOOK_TARGETS || '{}');
+      return handleConfigQuery(config);
     }
 
-    // Webhook 转发端点
-    if (url.pathname === '/webhook' || url.pathname.startsWith('/webhook/')) {
-      const targets = parseTargets(env.WEBHOOK_TARGETS || '[]');
-
-      if (targets.length === 0) {
+    // Webhook 转发端点: /webhook/:uuid
+    if (url.pathname.startsWith('/webhook/')) {
+      const extracted = extractUuidFromPath(url.pathname);
+      
+      if (!extracted) {
         return new Response(
-          JSON.stringify({ error: 'No webhook targets configured' }),
+          JSON.stringify({ error: 'Invalid path. Use /webhook/:uuid' }),
           {
-            status: 500,
+            status: 400,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+      }
+
+      const { uuid, subPath } = extracted;
+      const config = parseConfig(env.WEBHOOK_TARGETS || '{}');
+      const targets = config[uuid];
+
+      if (!targets || targets.length === 0) {
+        return new Response(
+          JSON.stringify({ 
+            error: 'UUID not found or no targets configured',
+            uuid,
+            availableUuids: Object.keys(config),
+          }),
+          {
+            status: 404,
             headers: { 'Content-Type': 'application/json' },
           }
         );
@@ -155,11 +210,10 @@ export default {
       const method = request.method;
       const headers = request.headers;
 
-      // 并行转发到所有目标
+      // 并行转发到该 UUID 对应的所有目标
       const results = await Promise.all(
         targets.map((target) => {
           // 如果原始请求有子路径，保留它
-          const subPath = url.pathname.replace('/webhook', '');
           const targetUrl = subPath ? `${target}${subPath}` : target;
           return forwardToTarget(targetUrl, method, headers, body);
         })
@@ -169,7 +223,8 @@ export default {
       const failed = results.filter((r) => !r.success).length;
 
       const response: ForwardResponse = {
-        message: `Forwarded to ${targets.length} targets`,
+        uuid,
+        message: `Forwarded to ${targets.length} targets for UUID: ${uuid}`,
         totalTargets: targets.length,
         successful,
         failed,
@@ -192,6 +247,20 @@ export default {
       });
     }
 
+    // /webhook 不带 UUID
+    if (url.pathname === '/webhook') {
+      return new Response(
+        JSON.stringify({ 
+          error: 'UUID required. Use /webhook/:uuid',
+          example: '/webhook/your-uuid-here',
+        }),
+        {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
     // 未知路径
     return new Response(
       JSON.stringify({
@@ -199,9 +268,9 @@ export default {
         availableEndpoints: [
           'GET / - Health check',
           'GET /health - Health check',
-          'GET /config - View configured targets',
-          'ANY /webhook - Forward request to all targets',
-          'ANY /webhook/* - Forward request with sub-path',
+          'GET /config - View configured UUIDs and targets',
+          'ANY /webhook/:uuid - Forward request to targets for specific UUID',
+          'ANY /webhook/:uuid/* - Forward request with sub-path',
         ],
       }),
       {

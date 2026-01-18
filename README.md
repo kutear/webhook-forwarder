@@ -2,14 +2,15 @@
 
 [![Deploy to Cloudflare Workers](https://github.com/kutear/webhook-forwarder/actions/workflows/deploy.yml/badge.svg)](https://github.com/kutear/webhook-forwarder/actions/workflows/deploy.yml)
 
-一个基于 Cloudflare Workers 的 Webhook 多目标转发服务。将收到的 webhook 请求同时转发到多个配置的后端地址，实现一对多的 webhook 分发。
+一个基于 Cloudflare Workers 的 Webhook 多目标转发服务。根据 URL 中的 UUID 将 webhook 请求转发到对应配置的多个后端地址，实现灵活的一对多 webhook 分发。
 
 ## 功能特性
 
-- **多目标转发** - 将单个 webhook 请求并行转发到多个目标地址
+- **UUID 路由** - 根据 URL 中的 UUID 路由到不同的目标配置
+- **多目标转发** - 每个 UUID 可配置多个目标地址，并行转发
 - **全方法支持** - 支持 GET、POST、PUT、DELETE 等所有 HTTP 方法
 - **请求完整保留** - 保留原始请求头和请求体
-- **子路径支持** - 支持 `/webhook/xxx` 子路径转发
+- **子路径支持** - 支持 `/webhook/:uuid/xxx` 子路径转发
 - **详细结果反馈** - 返回每个目标的转发状态、耗时等信息
 - **零成本运行** - 基于 Cloudflare Workers 免费套餐
 
@@ -56,17 +57,43 @@ npm run deploy
 1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com)
 2. 进入 **Workers & Pages** → 选择 **webhook-forwarder**
 3. 点击 **Settings** → **Variables and Secrets**
-4. 添加变量 `WEBHOOK_TARGETS`，值为 JSON 数组：
+4. 添加变量 `WEBHOOK_TARGETS`，值为 JSON 对象：
 
 ```json
-["https://slack.com/api/webhook", "https://discord.com/api/webhooks/xxx", "https://your-server.com/webhook"]
+{
+  "github-notify": [
+    "https://hooks.slack.com/services/xxx",
+    "https://discord.com/api/webhooks/xxx"
+  ],
+  "gitlab-notify": [
+    "https://your-server.com/webhook"
+  ],
+  "monitoring": [
+    "https://pagerduty.com/webhook",
+    "https://opsgenie.com/webhook",
+    "https://slack.com/webhook"
+  ]
+}
 ```
 
 ### 配置说明
 
 | 变量名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
-| `WEBHOOK_TARGETS` | JSON Array | 是 | 目标 webhook 地址列表 |
+| `WEBHOOK_TARGETS` | JSON Object | 是 | UUID 到目标地址列表的映射 |
+
+### 配置格式
+
+```
+{
+  "<uuid>": ["<target-url-1>", "<target-url-2>", ...],
+  "<uuid>": ["<target-url-1>"],
+  ...
+}
+```
+
+- **uuid**: 自定义的标识符，用于 URL 路由（如 `github`, `prod-alerts`, `service-a` 等）
+- **target-url**: 要转发到的目标 webhook 地址
 
 ## API 文档
 
@@ -96,42 +123,59 @@ GET /config
 
 ```json
 {
-  "targets": [
-    "https://slack.com/api/webhook",
-    "https://discord.com/api/webhooks/xxx"
-  ],
-  "count": 2
+  "uuids": ["github-notify", "gitlab-notify", "monitoring"],
+  "count": 3,
+  "config": {
+    "github-notify": [
+      "https://hooks.slack.com/services/xxx",
+      "https://discord.com/api/webhooks/xxx"
+    ],
+    "gitlab-notify": [
+      "https://your-server.com/webhook"
+    ],
+    "monitoring": [
+      "https://pagerduty.com/webhook",
+      "https://opsgenie.com/webhook"
+    ]
+  }
 }
 ```
 
 ### Webhook 转发
 
 ```
-ANY /webhook
-ANY /webhook/*
+ANY /webhook/:uuid
+ANY /webhook/:uuid/*
 ```
 
-接收任意 HTTP 请求并转发到所有配置的目标地址。
+根据 UUID 转发请求到对应配置的所有目标地址。
 
 **请求示例：**
 
 ```bash
-curl -X POST https://webhook-forwarder.kutear.workers.dev/webhook \
+# 转发到 github-notify 配置的所有目标
+curl -X POST https://webhook-forwarder.kutear.workers.dev/webhook/github-notify \
   -H "Content-Type: application/json" \
   -d '{"event": "push", "repository": "my-repo"}'
+
+# 带子路径的转发
+curl -X POST https://webhook-forwarder.kutear.workers.dev/webhook/monitoring/alerts \
+  -H "Content-Type: application/json" \
+  -d '{"alert": "CPU high"}'
 ```
 
 **响应示例：**
 
 ```json
 {
-  "message": "Forwarded to 2 targets",
+  "uuid": "github-notify",
+  "message": "Forwarded to 2 targets for UUID: github-notify",
   "totalTargets": 2,
   "successful": 2,
   "failed": 0,
   "results": [
     {
-      "target": "https://slack.com/api/webhook",
+      "target": "https://hooks.slack.com/services/xxx",
       "success": true,
       "status": 200,
       "statusText": "OK",
@@ -154,41 +198,67 @@ curl -X POST https://webhook-forwarder.kutear.workers.dev/webhook \
 |--------|------|
 | `200` | 所有目标转发成功 |
 | `207` | 部分目标转发成功（Multi-Status） |
-| `500` | 配置错误（未配置目标地址） |
+| `400` | 请求格式错误（缺少 UUID） |
+| `404` | UUID 未找到或未配置目标 |
 | `502` | 所有目标转发失败 |
 
 ## 使用场景
 
-### GitHub Webhook 多平台通知
+### 多环境 GitHub Webhook
 
-将 GitHub 仓库的 webhook 事件同时发送到 Slack、Discord、飞书等多个平台：
+为不同仓库或环境配置不同的通知目标：
 
-1. 在 GitHub 仓库 **Settings** → **Webhooks** 添加 webhook
-2. Payload URL 设置为：`https://webhook-forwarder.kutear.workers.dev/webhook`
-3. 配置 `WEBHOOK_TARGETS` 为各平台的 webhook 地址
+```json
+{
+  "frontend-repo": [
+    "https://slack.com/frontend-channel",
+    "https://discord.com/frontend-webhook"
+  ],
+  "backend-repo": [
+    "https://slack.com/backend-channel",
+    "https://teams.com/backend-webhook"
+  ],
+  "prod-deploy": [
+    "https://pagerduty.com/webhook",
+    "https://slack.com/alerts"
+  ]
+}
+```
+
+在 GitHub 中配置：
+- frontend 仓库 webhook URL: `https://your-worker.workers.dev/webhook/frontend-repo`
+- backend 仓库 webhook URL: `https://your-worker.workers.dev/webhook/backend-repo`
 
 ### 监控告警分发
 
-将监控系统的告警同时发送到多个接收端：
+不同级别的告警发送到不同的渠道：
 
 ```json
-[
-  "https://api.pagerduty.com/webhooks/xxx",
-  "https://hooks.slack.com/services/xxx",
-  "https://your-logging-service.com/alerts"
-]
+{
+  "critical": [
+    "https://pagerduty.com/webhook",
+    "https://slack.com/oncall",
+    "https://sms-gateway.com/api"
+  ],
+  "warning": [
+    "https://slack.com/warnings"
+  ],
+  "info": [
+    "https://logging-service.com/events"
+  ]
+}
 ```
 
-### 数据同步
+### 多租户 Webhook
 
-将数据变更事件同步到多个下游系统：
+为不同客户/租户配置独立的 webhook 转发：
 
 ```json
-[
-  "https://service-a.internal/sync",
-  "https://service-b.internal/sync",
-  "https://analytics.internal/events"
-]
+{
+  "customer-a": ["https://customer-a.com/webhook"],
+  "customer-b": ["https://customer-b.com/webhook", "https://customer-b-backup.com/webhook"],
+  "customer-c": ["https://customer-c.com/webhook"]
+}
 ```
 
 ## 项目结构

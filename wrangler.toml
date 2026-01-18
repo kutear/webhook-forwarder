@@ -4,12 +4,13 @@ compatibility_date = "2024-01-01"
 
 # 后端目标地址配置
 # 在 Cloudflare Dashboard 中配置环境变量 WEBHOOK_TARGETS
-# 格式: JSON 数组，例如: ["https://example1.com/webhook", "https://example2.com/webhook"]
+# 格式: JSON 对象，key 为 UUID，value 为目标地址数组
+# 例如: {"uuid1": ["https://example1.com/webhook"], "uuid2": ["https://example2.com/webhook", "https://example3.com/webhook"]}
 
 [vars]
 # 默认配置（可在 Dashboard 中覆盖）
-# WEBHOOK_TARGETS = '["https://target1.example.com/webhook", "https://target2.example.com/webhook"]'
+# WEBHOOK_TARGETS = '{"github": ["https://slack.com/webhook", "https://discord.com/webhook"], "gitlab": ["https://teams.com/webhook"]}'
 
 # 开发环境配置
 [env.dev.vars]
-WEBHOOK_TARGETS = '["http://localhost:3001/webhook", "http://localhost:3002/webhook"]'
+WEBHOOK_TARGETS = '{"test-uuid": ["http://localhost:3001/webhook", "http://localhost:3002/webhook"], "another-uuid": ["http://localhost:3003/webhook"]}'
