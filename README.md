@@ -1,7 +1,5 @@
 # Webhook Forwarder
 
-[![Deploy to Cloudflare Workers](https://github.com/kutear/webhook-forwarder/actions/workflows/deploy.yml/badge.svg)](https://github.com/kutear/webhook-forwarder/actions/workflows/deploy.yml)
-
 一个基于 Cloudflare Workers 的 Webhook 多目标转发服务。根据 URL 中的 UUID 将 webhook 请求转发到对应配置的多个后端地址，实现灵活的一对多 webhook 分发。
 
 ## 功能特性
@@ -40,11 +38,25 @@ npm run dev
 
 ### 部署
 
-```bash
-# 首次部署需要登录
-npx wrangler login
+本项目使用 Cloudflare 直接连接 GitHub 进行自动部署。
 
-# 部署到 Cloudflare
+#### 配置 Cloudflare Git 集成
+
+1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com)
+2. 进入 **Workers & Pages**
+3. 选择 **webhook-forwarder** → **Settings** → **Builds & Deployments**
+4. 点击 **Connect to Git** 并授权 GitHub
+5. 选择 `kutear/webhook-forwarder` 仓库
+6. 配置构建设置：
+   - **Build command**: `npm install`
+   - **Deploy command**: `npx wrangler deploy`
+
+配置完成后，每次推送到 `main` 分支会自动触发部署。
+
+#### 手动部署
+
+```bash
+npx wrangler login
 npm run deploy
 ```
 
@@ -265,9 +277,6 @@ curl -X POST https://webhook-forwarder.kutear.workers.dev/webhook/monitoring/ale
 
 ```
 webhook-forwarder/
-├── .github/
-│   └── workflows/
-│       └── deploy.yml    # GitHub Actions 自动部署
 ├── src/
 │   └── index.ts          # Worker 主代码
 ├── package.json
@@ -275,24 +284,6 @@ webhook-forwarder/
 ├── wrangler.toml         # Cloudflare Worker 配置
 └── README.md
 ```
-
-## GitHub Actions 自动部署
-
-本项目配置了 GitHub Actions，推送到 `main` 分支时自动部署。
-
-### 配置步骤
-
-1. 在 Cloudflare Dashboard 创建 API Token：
-   - 访问 https://dash.cloudflare.com/profile/api-tokens
-   - 点击 **Create Token**
-   - 选择 **Edit Cloudflare Workers** 模板
-   - 创建并复制 Token
-
-2. 在 GitHub 仓库添加 Secret：
-   - 进入仓库 **Settings** → **Secrets and variables** → **Actions**
-   - 添加 `CLOUDFLARE_API_TOKEN`，值为上一步复制的 Token
-
-3. 推送代码到 `main` 分支即可自动部署
 
 ## 开发命令
 
