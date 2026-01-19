@@ -32,6 +32,7 @@ interface ForwardResponse {
   successful: number;
   failed: number;
   results: ForwardResult[];
+  code: number;
 }
 
 /**
@@ -109,7 +110,7 @@ function parseConfig(configStr: string): WebhookConfig {
  * 处理健康检查
  */
 function handleHealthCheck(): Response {
-  return new Response(JSON.stringify({ status: 'ok', service: 'webhook-forwarder' }), {
+  return new Response(JSON.stringify({ status: 'ok', service: 'webhook-forwarder', code: 0 }), {
     headers: { 'Content-Type': 'application/json' },
   });
 }
@@ -137,6 +138,7 @@ function handleConfigQuery(config: WebhookConfig): Response {
       uuids: Object.keys(config),
       count: Object.keys(config).length,
       config: safeConfig,
+      code: 0,
     }, null, 2),
     {
       headers: { 'Content-Type': 'application/json' },
@@ -173,7 +175,7 @@ export default {
     if (url.pathname === '/config' && request.method === 'GET') {
       if (env.DEBUG !== 'true') {
         return new Response(
-          JSON.stringify({ error: 'Not Found' }),
+          JSON.stringify({ error: 'Not Found', code: -1 }),
           {
             status: 404,
             headers: { 'Content-Type': 'application/json' },
@@ -190,7 +192,7 @@ export default {
       
       if (!extracted) {
         return new Response(
-          JSON.stringify({ error: 'Invalid path. Use /webhook/:uuid' }),
+          JSON.stringify({ error: 'Invalid path. Use /webhook/:uuid', code: -1 }),
           {
             status: 400,
             headers: { 'Content-Type': 'application/json' },
@@ -204,10 +206,11 @@ export default {
 
       if (!targets || targets.length === 0) {
         return new Response(
-          JSON.stringify({ 
+          JSON.stringify({
             error: 'UUID not found or no targets configured',
             uuid,
             availableUuids: Object.keys(config),
+            code: -1,
           }),
           {
             status: 404,
@@ -240,6 +243,7 @@ export default {
         successful,
         failed,
         results,
+        code: successful > 0 ? 0 : -1,
       };
 
       // 如果所有转发都失败，返回 502
@@ -261,9 +265,10 @@ export default {
     // /webhook 不带 UUID
     if (url.pathname === '/webhook') {
       return new Response(
-        JSON.stringify({ 
+        JSON.stringify({
           error: 'UUID required. Use /webhook/:uuid',
           example: '/webhook/your-uuid-here',
+          code: -1,
         }),
         {
           status: 400,
@@ -283,6 +288,7 @@ export default {
           'ANY /webhook/:uuid - Forward request to targets for specific UUID',
           'ANY /webhook/:uuid/* - Forward request with sub-path',
         ],
+        code: -1,
       }),
       {
         status: 404,
