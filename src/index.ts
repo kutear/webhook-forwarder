@@ -1,19 +1,31 @@
 /**
  * Webhook Forwarder - Cloudflare Worker
- * 
- * 将收到的 webhook 请求根据 UUID 转发到对应配置的后端地址
+ *
+ * Forwards incoming webhook requests to configured backend URLs based on a path identifier.
  */
 
 export interface Env {
-  // 目标 webhook 地址配置，JSON 对象格式
-  // 格式: { "uuid1": ["url1", "url2"], "uuid2": ["url3"] }
-  WEBHOOK_TARGETS: string;
-  // 调试模式，设置为 "true" 时允许访问 /config 端点
+  // Configuration is now done via environment variables prefixed with `FORWARD_`.
+  // The key for the webhook path is the part of the variable name after `FORWARD_`.
+  // The value is a comma-separated list of webhook URLs.
+  //
+  // Example:
+  // FORWARD_my-service = "https://example.com/hook1,https://example.com/hook2"
+  // This will create a forwarding endpoint at /webhook/my-service
+  //
+  // For wrangler.toml, use quotes for keys if needed:
+  // [vars]
+  // "FORWARD_my-service" = "https://example.com/hook1,https://example.com/hook2"
+  // "FORWARD_another-uuid-style-key" = "https://example.com/hook3"
+
+  [key: string]: any; // Allow any environment variables
+
+  // Set to "true" to enable the /config endpoint for debugging.
   DEBUG?: string;
 }
 
 interface WebhookConfig {
-  [uuid: string]: string[];
+  [id: string]: string[];
 }
 
 interface ForwardResult {
@@ -26,7 +38,7 @@ interface ForwardResult {
 }
 
 interface ForwardResponse {
-  uuid: string;
+  id: string;
   message: string;
   totalTargets: number;
   successful: number;
@@ -36,7 +48,7 @@ interface ForwardResponse {
 }
 
 /**
- * 转发请求到单个目标
+ * Forwards the request to a single target URL.
  */
 async function forwardToTarget(
   target: string,
@@ -45,17 +57,17 @@ async function forwardToTarget(
   body: ArrayBuffer | null
 ): Promise<ForwardResult> {
   const startTime = Date.now();
-  
+
   try {
-    // 复制请求头，移除一些不应转发的头
+    // Clone headers and remove sensitive/unnecessary ones.
     const forwardHeaders = new Headers(headers);
     forwardHeaders.delete('host');
     forwardHeaders.delete('cf-connecting-ip');
     forwardHeaders.delete('cf-ray');
     forwardHeaders.delete('cf-visitor');
     forwardHeaders.delete('cf-ipcountry');
-    
-    // 添加自定义头标识这是转发的请求
+
+    // Add custom headers to identify the forwarder.
     forwardHeaders.set('X-Forwarded-By', 'webhook-forwarder');
     forwardHeaders.set('X-Original-Host', headers.get('host') || '');
 
@@ -83,31 +95,28 @@ async function forwardToTarget(
 }
 
 /**
- * 解析目标地址配置
+ * Parses the configuration from environment variables.
+ * A variable is considered a target if its name starts with `FORWARD_`.
+ * The path identifier is the part of the name after the prefix.
+ * The value should be a comma-separated list of URLs.
  */
-function parseConfig(configStr: string): WebhookConfig {
-  try {
-    const config = JSON.parse(configStr);
-    if (typeof config !== 'object' || config === null || Array.isArray(config)) {
-      throw new Error('WEBHOOK_TARGETS must be a JSON object');
-    }
-    
-    // 验证并清理配置
-    const result: WebhookConfig = {};
-    for (const [uuid, targets] of Object.entries(config)) {
-      if (Array.isArray(targets)) {
-        result[uuid] = targets.filter((t): t is string => typeof t === 'string' && t.length > 0);
+function parseConfig(env: Env): WebhookConfig {
+  const config: WebhookConfig = {};
+  const prefix = 'FORWARD_';
+
+  for (const [key, value] of Object.entries(env)) {
+    if (key.startsWith(prefix) && typeof value === 'string' && value.length > 0) {
+      const id = key.substring(prefix.length);
+      if (id) {
+        config[id] = value.split(',').map(url => url.trim()).filter(Boolean);
       }
     }
-    return result;
-  } catch (error) {
-    console.error('Failed to parse WEBHOOK_TARGETS:', error);
-    return {};
   }
+  return config;
 }
 
 /**
- * 处理健康检查
+ * Handles health check requests.
  */
 function handleHealthCheck(): Response {
   return new Response(JSON.stringify({ status: 'ok', service: 'webhook-forwarder', code: 0 }), {
@@ -116,14 +125,14 @@ function handleHealthCheck(): Response {
 }
 
 /**
- * 处理配置查询
+ * Handles configuration query requests.
  */
 function handleConfigQuery(config: WebhookConfig): Response {
-  const safeConfig: { [uuid: string]: string[] } = {};
-  
-  for (const [uuid, targets] of Object.entries(config)) {
-    safeConfig[uuid] = targets.map((t) => {
-      // 隐藏敏感信息（如 query params）
+  const safeConfig: { [id: string]: string[] } = {};
+
+  for (const [id, targets] of Object.entries(config)) {
+    safeConfig[id] = targets.map((t) => {
+      // Hide sensitive information (like query params) from the config view.
       try {
         const url = new URL(t);
         return `${url.protocol}//${url.host}${url.pathname}`;
@@ -135,7 +144,7 @@ function handleConfigQuery(config: WebhookConfig): Response {
 
   return new Response(
     JSON.stringify({
-      uuids: Object.keys(config),
+      ids: Object.keys(config),
       count: Object.keys(config).length,
       config: safeConfig,
       code: 0,
@@ -147,17 +156,17 @@ function handleConfigQuery(config: WebhookConfig): Response {
 }
 
 /**
- * 从路径中提取 UUID
- * /webhook/abc-123 -> abc-123
- * /webhook/abc-123/extra/path -> abc-123
+ * Extracts the identifier and sub-path from the request path.
+ * e.g., /webhook/abc-123 -> { id: 'abc-123', subPath: '' }
+ * e.g., /webhook/abc-123/extra/path -> { id: 'abc-123', subPath: '/extra/path' }
  */
-function extractUuidFromPath(pathname: string): { uuid: string; subPath: string } | null {
+function extractIdFromPath(pathname: string): { id: string; subPath: string } | null {
   const match = pathname.match(/^\/webhook\/([^\/]+)(\/.*)?$/);
   if (!match) {
     return null;
   }
   return {
-    uuid: match[1],
+    id: match[1],
     subPath: match[2] || '',
   };
 }
@@ -165,13 +174,13 @@ function extractUuidFromPath(pathname: string): { uuid: string; subPath: string 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    
-    // 健康检查端点
+
+    // Health check endpoint
     if (url.pathname === '/health' || url.pathname === '/') {
       return handleHealthCheck();
     }
 
-    // 配置查询端点（仅在 DEBUG=true 时可用）
+    // Config query endpoint (only available if DEBUG=true)
     if (url.pathname === '/config' && request.method === 'GET') {
       if (env.DEBUG !== 'true') {
         return new Response(
@@ -182,17 +191,17 @@ export default {
           }
         );
       }
-      const config = parseConfig(env.WEBHOOK_TARGETS || '{}');
+      const config = parseConfig(env);
       return handleConfigQuery(config);
     }
 
-    // Webhook 转发端点: /webhook/:uuid
+    // Webhook forwarding endpoint: /webhook/:id
     if (url.pathname.startsWith('/webhook/')) {
-      const extracted = extractUuidFromPath(url.pathname);
-      
+      const extracted = extractIdFromPath(url.pathname);
+
       if (!extracted) {
         return new Response(
-          JSON.stringify({ error: 'Invalid path. Use /webhook/:uuid', code: -1 }),
+          JSON.stringify({ error: 'Invalid path. Use /webhook/:id', code: -1 }),
           {
             status: 400,
             headers: { 'Content-Type': 'application/json' },
@@ -200,16 +209,16 @@ export default {
         );
       }
 
-      const { uuid, subPath } = extracted;
-      const config = parseConfig(env.WEBHOOK_TARGETS || '{}');
-      const targets = config[uuid];
+      const { id, subPath } = extracted;
+      const config = parseConfig(env);
+      const targets = config[id];
 
       if (!targets || targets.length === 0) {
         return new Response(
           JSON.stringify({
-            error: 'UUID not found or no targets configured',
-            uuid,
-            availableUuids: Object.keys(config),
+            error: 'Identifier not found or no targets configured',
+            id,
+            availableIds: Object.keys(config),
             code: -1,
           }),
           {
@@ -219,16 +228,16 @@ export default {
         );
       }
 
-      // 读取请求体（只读一次）
+      // Read the request body once.
       const body = await request.arrayBuffer();
       const method = request.method;
       const headers = request.headers;
 
-      // 并行转发到该 UUID 对应的所有目标
+      // Forward to all targets for this ID in parallel.
       const results = await Promise.all(
         targets.map((target) => {
-          // 如果原始请求有子路径，保留它
-          const targetUrl = subPath ? `${target}${subPath}` : target;
+          // Append the sub-path if it exists.
+          const targetUrl = subPath ? `${target.replace(/\/$/, '')}${subPath}` : target;
           return forwardToTarget(targetUrl, method, headers, body);
         })
       );
@@ -237,8 +246,8 @@ export default {
       const failed = results.filter((r) => !r.success).length;
 
       const response: ForwardResponse = {
-        uuid,
-        message: `Forwarded to ${targets.length} targets for UUID: ${uuid}`,
+        id,
+        message: `Forwarded to ${targets.length} targets for ID: ${id}`,
         totalTargets: targets.length,
         successful,
         failed,
@@ -246,9 +255,10 @@ export default {
         code: successful > 0 ? 0 : -1,
       };
 
-      // 如果所有转发都失败，返回 502
-      // 如果部分成功，返回 207 (Multi-Status)
-      // 如果全部成功，返回 200
+      // Determine the overall status code.
+      // 502 if all forwards failed.
+      // 207 (Multi-Status) if some failed.
+      // 200 if all succeeded.
       let statusCode = 200;
       if (failed > 0 && successful === 0) {
         statusCode = 502;
@@ -262,12 +272,12 @@ export default {
       });
     }
 
-    // /webhook 不带 UUID
+    // Handle /webhook without an ID.
     if (url.pathname === '/webhook') {
       return new Response(
         JSON.stringify({
-          error: 'UUID required. Use /webhook/:uuid',
-          example: '/webhook/your-uuid-here',
+          error: 'Identifier required. Use /webhook/:id',
+          example: '/webhook/your-service-id',
           code: -1,
         }),
         {
@@ -277,16 +287,16 @@ export default {
       );
     }
 
-    // 未知路径
+    // Catch-all for unknown paths.
     return new Response(
       JSON.stringify({
         error: 'Not Found',
         availableEndpoints: [
           'GET / - Health check',
           'GET /health - Health check',
-          'GET /config - View configured UUIDs and targets',
-          'ANY /webhook/:uuid - Forward request to targets for specific UUID',
-          'ANY /webhook/:uuid/* - Forward request with sub-path',
+          'GET /config - View configured IDs and targets (requires DEBUG=true)',
+          'ANY /webhook/:id - Forward request to targets for a specific ID',
+          'ANY /webhook/:id/* - Forward request with sub-path',
         ],
         code: -1,
       }),

@@ -1,26 +1,28 @@
 # Webhook Forwarder
 
-一个基于 Cloudflare Workers 的 Webhook 多目标转发服务。根据 URL 中的 UUID 将 webhook 请求转发到对应配置的多个后端地址，实现灵活的一对多 webhook 分发。
+A Cloudflare Workers-based service for forwarding webhooks to multiple destinations. It routes webhook requests to corresponding backend URLs based on a path identifier, enabling flexible one-to-many webhook distribution.
 
-## 功能特性
+一个基于 Cloudflare Workers 的 Webhook 多目标转发服务。根据 URL 中的路径标识符将 webhook 请求转发到对应配置的多个后端地址，实现灵活的一对多 webhook 分发。
 
-- **UUID 路由** - 根据 URL 中的 UUID 路由到不同的目标配置
-- **多目标转发** - 每个 UUID 可配置多个目标地址，并行转发
-- **全方法支持** - 支持 GET、POST、PUT、DELETE 等所有 HTTP 方法
-- **请求完整保留** - 保留原始请求头和请求体
-- **子路径支持** - 支持 `/webhook/:uuid/xxx` 子路径转发
-- **详细结果反馈** - 返回每个目标的转发状态、耗时等信息
-- **零成本运行** - 基于 Cloudflare Workers 免费套餐
+## 功能特性 (Features)
 
-## 快速开始
+- **路径标识符路由** - Route to different target configurations based on a path identifier in the URL.
+- **多目标转发** - Each identifier can be configured with multiple target URLs for parallel forwarding.
+- **全方法支持** - Supports all HTTP methods including GET, POST, PUT, DELETE.
+- **请求完整保留** - Preserves original request headers and body.
+- **子路径支持** - Supports forwarding with sub-paths, e.g., `/webhook/:id/xxx`.
+- **详细结果反馈** - Returns detailed forwarding status, duration, etc., for each target.
+- **零成本运行** - Runs on the Cloudflare Workers free tier.
 
-### 前置要求
+## 快速开始 (Quick Start)
+
+### 前置要求 (Prerequisites)
 
 - Node.js >= 18
-- Cloudflare 账号
+- A Cloudflare account
 - [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/)
 
-### 安装
+### 安装 (Installation)
 
 ```bash
 git clone https://github.com/kutear/webhook-forwarder.git
@@ -28,160 +30,130 @@ cd webhook-forwarder
 npm install
 ```
 
-### 本地开发
+### 本地开发 (Local Development)
 
 ```bash
 npm run dev
 ```
 
-访问 http://localhost:8787 进行测试。
+Access http://localhost:8787 to test. The dev server will use variables from `wrangler.toml` under `[env.dev.vars]`.
 
-### 部署
+### 部署 (Deployment)
 
-本项目使用 Cloudflare 直接连接 GitHub 进行自动部署。
+You can deploy automatically via Cloudflare's Git integration or manually.
 
-#### 配置 Cloudflare Git 集成
-
-1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com)
-2. 进入 **Workers & Pages**
-3. 选择 **webhook-forwarder** → **Settings** → **Builds & Deployments**
-4. 点击 **Connect to Git** 并授权 GitHub
-5. 选择 `kutear/webhook-forwarder` 仓库
-6. 配置构建设置：
-   - **Build command**: `npm install`
-   - **Deploy command**: `npx wrangler deploy`
-
-配置完成后，每次推送到 `main` 分支会自动触发部署。
-
-#### 手动部署
+#### 手动部署 (Manual Deployment)
 
 ```bash
 npx wrangler login
 npm run deploy
 ```
 
-## 配置
+After deployment, you need to configure the environment variables in the Cloudflare Dashboard.
 
-### 配置目标地址
+## 配置 (Configuration)
 
-在 Cloudflare Dashboard 中配置环境变量 `WEBHOOK_TARGETS`：
+### 配置目标地址 (Configuring Targets)
 
-1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com)
-2. 进入 **Workers & Pages** → 选择 **webhook-forwarder**
-3. 点击 **Settings** → **Variables and Secrets**
-4. 添加变量 `WEBHOOK_TARGETS`，值为 JSON 对象：
+Configuration is done via environment variables with a `FORWARD_` prefix.
 
-```json
-{
-  "github-notify": [
-    "https://hooks.slack.com/services/xxx",
-    "https://discord.com/api/webhooks/xxx"
-  ],
-  "gitlab-notify": [
-    "https://your-server.com/webhook"
-  ],
-  "monitoring": [
-    "https://pagerduty.com/webhook",
-    "https://opsgenie.com/webhook",
-    "https://slack.com/webhook"
-  ]
-}
-```
+1.  Log in to the [Cloudflare Dashboard](https://dash.cloudflare.com).
+2.  Go to **Workers & Pages** → select **webhook-forwarder**.
+3.  Click on **Settings** → **Variables and Secrets**.
+4.  Add environment variables. The variable name defines the path, and the value defines the target URLs.
 
-### 配置说明
+**Example:**
 
-| 变量名 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| `WEBHOOK_TARGETS` | JSON Object | 是 | UUID 到目标地址列表的映射 |
+-   **Variable Name**: `FORWARD_github-updates`
+-   **Variable Value**: `https://hooks.slack.com/services/xxx,https://discord.com/api/webhooks/xxx`
 
-### 配置格式
+This configuration will create an endpoint at `/webhook/github-updates` that forwards requests to both the Slack and Discord URLs.
 
-```
-{
-  "<uuid>": ["<target-url-1>", "<target-url-2>", ...],
-  "<uuid>": ["<target-url-1>"],
-  ...
-}
-```
+### 配置说明 (Configuration Details)
 
-- **uuid**: 自定义的标识符，用于 URL 路由（如 `github`, `prod-alerts`, `service-a` 等）
-- **target-url**: 要转发到的目标 webhook 地址
+| 变量名 (Variable Name) | 类型 (Type) | 必填 (Required) | 说明 (Description) |
+|---|---|---|---|
+| `FORWARD_<your-id>` | String | 是 (Yes) | A comma-separated list of target URLs. `<your-id>` becomes the path identifier. |
+| `DEBUG` | String | 否 (No) | Set to `"true"` to enable the `/config` endpoint for viewing the parsed configuration. |
 
-## API 文档
+## API 文档 (API Documentation)
 
-### 健康检查
+### 健康检查 (Health Check)
 
 ```
 GET /
 GET /health
 ```
 
-**响应示例：**
+**响应示例 (Example Response):**
 
 ```json
 {
   "status": "ok",
-  "service": "webhook-forwarder"
+  "service": "webhook-forwarder",
+  "code": 0
 }
 ```
 
-### 查看配置
+### 查看配置 (View Configuration)
+
+> **Note:** This endpoint is only available when the `DEBUG` environment variable is set to `"true"`.
 
 ```
 GET /config
 ```
 
-**响应示例：**
+**响应示例 (Example Response):**
 
 ```json
 {
-  "uuids": ["github-notify", "gitlab-notify", "monitoring"],
-  "count": 3,
+  "ids": [
+    "test-id",
+    "another-id"
+  ],
+  "count": 2,
   "config": {
-    "github-notify": [
-      "https://hooks.slack.com/services/xxx",
-      "https://discord.com/api/webhooks/xxx"
+    "test-id": [
+      "http://localhost:3001/webhook",
+      "http://localhost:3002/webhook"
     ],
-    "gitlab-notify": [
-      "https://your-server.com/webhook"
-    ],
-    "monitoring": [
-      "https://pagerduty.com/webhook",
-      "https://opsgenie.com/webhook"
+    "another-id": [
+      "http://localhost:3003/webhook"
     ]
-  }
+  },
+  "code": 0
 }
 ```
 
-### Webhook 转发
+### Webhook 转发 (Webhook Forwarding)
 
 ```
-ANY /webhook/:uuid
-ANY /webhook/:uuid/*
+ANY /webhook/:id
+ANY /webhook/:id/*
 ```
 
-根据 UUID 转发请求到对应配置的所有目标地址。
+Forwards the request to all target URLs configured for the given `:id`.
 
-**请求示例：**
+**请求示例 (Example Request):**
 
 ```bash
-# 转发到 github-notify 配置的所有目标
-curl -X POST https://webhook-forwarder.kutear.workers.dev/webhook/github-notify \
+# Forward to all targets configured for "github-updates"
+curl -X POST https://your-worker.workers.dev/webhook/github-updates \
   -H "Content-Type: application/json" \
   -d '{"event": "push", "repository": "my-repo"}'
 
-# 带子路径的转发
-curl -X POST https://webhook-forwarder.kutear.workers.dev/webhook/monitoring/alerts \
+# Forward with a sub-path
+curl -X POST https://your-worker.workers.dev/webhook/monitoring/alerts \
   -H "Content-Type: application/json" \
   -d '{"alert": "CPU high"}'
 ```
 
-**响应示例：**
+**响应示例 (Example Response):**
 
 ```json
 {
-  "uuid": "github-notify",
-  "message": "Forwarded to 2 targets for UUID: github-notify",
+  "id": "github-updates",
+  "message": "Forwarded to 2 targets for ID: github-updates",
   "totalTargets": 2,
   "successful": 2,
   "failed": 0,
@@ -200,117 +172,92 @@ curl -X POST https://webhook-forwarder.kutear.workers.dev/webhook/monitoring/ale
       "statusText": "No Content",
       "duration": 156
     }
-  ]
+  ],
+  "code": 0
 }
 ```
 
-### HTTP 状态码
+### HTTP 状态码 (HTTP Status Codes)
 
-| 状态码 | 说明 |
-|--------|------|
-| `200` | 所有目标转发成功 |
-| `207` | 部分目标转发成功（Multi-Status） |
-| `400` | 请求格式错误（缺少 UUID） |
-| `404` | UUID 未找到或未配置目标 |
-| `502` | 所有目标转发失败 |
+| 状态码 (Status Code) | 说明 (Description) |
+|---|---|
+| `200` | All targets forwarded successfully. |
+| `207` | Some targets forwarded successfully (Multi-Status). |
+| `400` | Bad request (e.g., missing identifier). |
+| `404` | Identifier not found or no targets configured. |
+| `502` | All targets failed to forward. |
 
-## 使用场景
+## 使用场景 (Use Cases)
 
-### 多环境 GitHub Webhook
+### 多环境 GitHub Webhook (Multi-environment GitHub Webhooks)
 
-为不同仓库或环境配置不同的通知目标：
+Configure different notification targets for different repositories or environments.
 
-```json
-{
-  "frontend-repo": [
-    "https://slack.com/frontend-channel",
-    "https://discord.com/frontend-webhook"
-  ],
-  "backend-repo": [
-    "https://slack.com/backend-channel",
-    "https://teams.com/backend-webhook"
-  ],
-  "prod-deploy": [
-    "https://pagerduty.com/webhook",
-    "https://slack.com/alerts"
-  ]
-}
-```
+**Cloudflare Environment Variables:**
+- `FORWARD_frontend-repo` = `https://slack.com/frontend-channel,https://discord.com/frontend-webhook`
+- `FORWARD_backend-repo` = `https://slack.com/backend-channel,https://teams.com/backend-webhook`
+- `FORWARD_prod-deploy` = `https://pagerduty.com/webhook,https://slack.com/alerts`
 
-在 GitHub 中配置：
-- frontend 仓库 webhook URL: `https://your-worker.workers.dev/webhook/frontend-repo`
-- backend 仓库 webhook URL: `https://your-worker.workers.dev/webhook/backend-repo`
+**GitHub Webhook URLs:**
+- `frontend-repo`: `https://your-worker.workers.dev/webhook/frontend-repo`
+- `backend-repo`: `https://your-worker.workers.dev/webhook/backend-repo`
 
-### 监控告警分发
+### 监控告警分发 (Monitoring Alert Distribution)
 
-不同级别的告警发送到不同的渠道：
+Send alerts of different severity levels to different channels.
 
-```json
-{
-  "critical": [
-    "https://pagerduty.com/webhook",
-    "https://slack.com/oncall",
-    "https://sms-gateway.com/api"
-  ],
-  "warning": [
-    "https://slack.com/warnings"
-  ],
-  "info": [
-    "https://logging-service.com/events"
-  ]
-}
-```
+**Cloudflare Environment Variables:**
+- `FORWARD_critical` = `https://pagerduty.com/webhook,https://slack.com/oncall,https://sms-gateway.com/api`
+- `FORWARD_warning` = `https://slack.com/warnings`
+- `FORWARD_info` = `https://logging-service.com/events`
 
-### 多租户 Webhook
+### 多租户 Webhook (Multi-tenant Webhooks)
 
-为不同客户/租户配置独立的 webhook 转发：
+Configure separate webhook forwarding for different customers/tenants.
 
-```json
-{
-  "customer-a": ["https://customer-a.com/webhook"],
-  "customer-b": ["https://customer-b.com/webhook", "https://customer-b-backup.com/webhook"],
-  "customer-c": ["https://customer-c.com/webhook"]
-}
-```
+**Cloudflare Environment Variables:**
+- `FORWARD_customer-a` = `https://customer-a.com/webhook`
+- `FORWARD_customer-b` = `https://customer-b.com/webhook,https://customer-b-backup.com/webhook`
+- `FORWARD_customer-c` = `https://customer-c.com/webhook`
 
-## 项目结构
+## 项目结构 (Project Structure)
 
 ```
 webhook-forwarder/
 ├── src/
-│   └── index.ts          # Worker 主代码
+│   └── index.ts          # Main Worker code
 ├── package.json
 ├── tsconfig.json
-├── wrangler.toml         # Cloudflare Worker 配置
+├── wrangler.toml         # Cloudflare Worker configuration
 └── README.md
 ```
 
-## 开发命令
+## 开发命令 (Development Commands)
 
 ```bash
-# 安装依赖
+# Install dependencies
 npm install
 
-# 本地开发（热重载）
+# Run local dev server (with hot-reload)
 npm run dev
 
-# 部署到生产环境
+# Deploy to production
 npm run deploy
 
-# 查看实时日志
+# View real-time logs
 npm run tail
 ```
 
-## 自定义请求头
+## 自定义请求头 (Custom Request Headers)
 
-转发时会添加以下请求头：
+The following headers are added during forwarding:
 
-| 请求头 | 说明 |
-|--------|------|
-| `X-Forwarded-By` | 标识请求来自 webhook-forwarder |
-| `X-Original-Host` | 原始请求的 Host |
+| Header | Description |
+|---|---|
+| `X-Forwarded-By` | Identifies the request as coming from `webhook-forwarder`. |
+| `X-Original-Host` | The `Host` of the original request. |
 
-以下请求头会被移除（避免冲突）：
+The following headers are removed to prevent conflicts:
 
 - `host`
 - `cf-connecting-ip`
